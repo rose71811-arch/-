@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文具用品盤點庫存表 - v17.2 雲端修復正式版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f4f6f5; color: #333333; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        #root:empty::before { content: "正在同步雲端資料庫..."; display: flex; justify-content: center; align-items: center; height: 100vh; color: #586963; font-weight: 500; }
+        
+        .morandi-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); border: 1px solid rgba(0, 0, 0, 0.05); background: white; }
+        .morandi-card:hover { transform: translateY(-4px); box-shadow: 0 15px 35px -10px rgba(88, 105, 99, 0.2); }
+        
+        /* 標題列配色 */
+        .main-header { background-color: #586963; } 
+        .logs-header { background-color: #9A7B66; }
+        
+        .modal-overlay { background-color: rgba(61, 75, 72, 0.6); backdrop-filter: blur(5px); }
+        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); }
+        .search-results { max-height: 250px; overflow-y: auto; z-index: 100; }
+        .required-star { color: #ef4444; margin-left: 2px; font-weight: 900; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // 將函式掛載至 window 供 React 使用
+        window.FB_API = { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, getFirestore, doc, setDoc, getDoc, onSnapshot, collection, deleteDoc };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef } = React;
+
+        const Icons = {
+            Package: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M16.5 9.4 7.5 4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.29 7 12 12 20.71 7"/><line x1="12" y1="22" x2="12" y2="12"/></svg>,
+            LayoutDashboard: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>,
+            History: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>,
+            Search: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>,
+            Plus: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>,
+            Minus: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/></svg>,
+            Save: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
+            Trash2: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>,
+            ChevronDown: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>,
+            Settings: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>,
+            ArrowRightLeft: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg>,
+            X: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>,
+            User: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+            Calendar: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
+            ClipboardCheck: (p) => <svg {...p} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg>
+        };
+
+        const INITIAL_SEED = [
+            { category: "修正黏著", items: [ 
+                { id: 1, name: "修正帶", unit: "個", quantity: 6, note: "5mm" },
+                { id: 2, name: "修正帶替換內帶", unit: "個", quantity: 36, note: "10入/盒" },
+                { id: 4, name: "雄獅膠水", unit: "瓶", quantity: 13, note: "" },
+                { id: 6, name: "鹿頭雙面膠-18mm", unit: "個", quantity: 16, note: "" }
+            ] },
+            { category: "書寫用品", items: [ 
+                { id: 104, name: "2B筆芯", unit: "入", quantity: 15, note: "10入/盒" },
+                { id: 105, name: "欣南原字筆-藍", unit: "盒", quantity: 14, note: "20盒/箱" }
+            ] },
+            { category: "雜物", items: [ 
+                { id: 201, name: "1號電池(黑貓)", unit: "組", quantity: 40, note: "2顆/組" }
+            ] }
+        ];
+
+        const CATEGORY_STYLES = { 
+            "修正黏著": { head: "bg-[#B0655A]", light: "bg-[#F7EEEB]", hex: "#B0655A" }, 
+            "書寫用品": { head: "bg-[#5B7083]", light: "bg-[#E9EEF2]", hex: "#5B7083" }, 
+            "雜物": { head: "bg-[#6B7B63]", light: "bg-[#F1F3F0]", hex: "#6B7B63" }, 
+            "其它": { head: "bg-[#8E9775]", light: "bg-[#F0F2E8]", hex: "#8E9775" },
+            "預設": { head: "bg-[#586963]", light: "bg-[#F1F3F2]", hex: "#586963" } 
+        };
+
+        const InlineEdit = ({ value, onSave, className, placeholder, isNumeric = false, isSpec = false, forceRed = false, color }) => {
+            const [isEditing, setIsEditing] = useState(false);
+            const [temp, setTemp] = useState(value);
+            useEffect(() => setTemp(value), [value]);
+            const finish = () => { onSave(isNumeric ? (parseInt(temp, 10) || 0) : temp); setIsEditing(false); };
+            
+            let displayColor = color || "#000000"; 
+            if (isSpec) displayColor = "#94a3b8"; 
+            if (isNumeric && forceRed && value <= 0) displayColor = "#ef4444"; 
+
+            if (isEditing) return <input autoFocus type={isNumeric ? "number" : "text"} className={`border-2 border-[#586963] outline-none rounded px-1 w-full bg-white font-bold ${className}`} style={{ color: (isNumeric && forceRed && temp <= 0) ? "#ef4444" : "#000000" }} value={temp} onChange={(e) => setTemp(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') finish(); if (e.key === 'Escape') setIsEditing(false); }} onBlur={finish} />;
+            return <div onClick={(e) => { e.stopPropagation(); setIsEditing(true); }} className={`cursor-text hover:bg-black/5 rounded transition-all px-1 ${className}`} style={{ color: displayColor }}>{value || <span className="opacity-30 italic text-[10px]">{placeholder}</span>}</div>;
+        };
+
+        const SearchableSelect = ({ items, selectedId, onSelect, placeholder, isTableMode = false }) => {
+            const [searchTerm, setSearchTerm] = useState("");
+            const [isOpen, setIsOpen] = useState(false);
+            const wrapperRef = useRef(null);
+            const selectedItem = useMemo(() => items.find(i => i.id === parseInt(selectedId)), [items, selectedId]);
+            const filteredItems = useMemo(() => searchTerm ? items.filter(i => i.name.toLowerCase().includes(searchTerm.toLowerCase())) : items, [items, searchTerm]);
+
+            useEffect(() => {
+                const handleClickOutside = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setIsOpen(false); };
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => document.removeEventListener("mousedown", handleClickOutside);
+            }, []);
+
+            return (
+                <div className="relative w-full" ref={wrapperRef}>
+                    <div onClick={() => setIsOpen(!isOpen)} className={`${isTableMode ? 'p-1 hover:bg-black/5 rounded cursor-pointer' : 'w-full bg-white p-4 rounded-2xl font-bold border border-slate-200 shadow-sm flex justify-between items-center cursor-pointer hover:border-slate-300 transition-all'}`}>
+                        <span className={selectedItem ? "text-[#333333]" : "text-slate-400"}>
+                            {selectedItem ? `${selectedItem.name}${isTableMode ? '' : ` (庫存:${selectedItem.quantity})`}` : placeholder}
+                        </span>
+                        {!isTableMode && <Icons.ChevronDown className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />}
+                    </div>
+                    {isOpen && (
+                        <div className="absolute top-full left-0 w-full min-w-[200px] mt-2 bg-white rounded-2xl shadow-2xl border border-slate-100 search-results z-[100] animate-in fade-in zoom-in-95 duration-200">
+                            <div className="sticky top-0 p-3 bg-slate-50 border-b">
+                                <div className="relative"><Icons.Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><input autoFocus type="text" className="w-full pl-9 pr-4 py-2 border rounded-xl text-sm outline-none focus:ring-2 focus:ring-slate-200 text-slate-700" placeholder="搜尋..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} onClick={(e) => e.stopPropagation()} /></div>
+                            </div>
+                            <div className="py-2">
+                                {filteredItems.map(i => (
+                                    <div key={i.id} onClick={() => { onSelect(i.id); setIsOpen(false); setSearchTerm(""); }} className="px-5 py-3 hover:bg-slate-50 cursor-pointer flex justify-between items-center group transition-colors text-slate-700">
+                                        <div className="flex flex-col"><span className="font-bold group-hover:text-blue-600">{i.name}</span><span className="text-[10px] text-slate-400 uppercase">{i.category}</span></div>
+                                        <span className={`text-xs font-black px-3 py-1 rounded-full ${i.quantity <= 0 ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-600'}`}>庫存: {i.quantity}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [view, setView] = useState("inventory");
+            const [user, setUser] = useState(null);
+            const [db, setDb] = useState(null);
+            const [data, setData] = useState([]);
+            const [logs, setLogs] = useState([]);
+            const [searchTerm, setSearchTerm] = useState("");
+            const [showManage, setShowManage] = useState(false);
+            const [showAddItem, setShowAddItem] = useState(null);
+            const [toast, setToast] = useState(null);
+            const [isLoading, setIsLoading] = useState(true);
+
+            const [batchMeta, setBatchMeta] = useState({ user: "", date: new Date().toISOString().split('T')[0] });
+            const [batchItems, setBatchItems] = useState([{ itemId: "", in: 0, out: 0, note: "", key: Date.now() }]);
+
+            const showMsg = (m) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'stationery-shared-v17';
+
+            useEffect(() => {
+                const init = async () => {
+                    const { FB_API } = window;
+                    if (!FB_API) { setTimeout(init, 500); return; }
+                    
+                    const firebaseConfig = JSON.parse(__firebase_config);
+                    const app = FB_API.initializeApp(firebaseConfig);
+                    const database = FB_API.getFirestore(app);
+                    const auth = FB_API.getAuth(app);
+                    setDb(database);
+
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await FB_API.signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await FB_API.signInAnonymously(auth);
+                    }
+
+                    FB_API.onAuthStateChanged(auth, (u) => {
+                        if (u) {
+                            setUser(u);
+                            // 修正路徑段數：使用 6 段路徑 (偶數段)
+                            const invRef = FB_API.doc(database, 'artifacts', appId, 'public', 'data', 'inventory_col', 'main_doc');
+                            FB_API.onSnapshot(invRef, (snap) => {
+                                if (snap.exists()) setData(snap.data().content || []);
+                                else FB_API.setDoc(invRef, { content: INITIAL_SEED });
+                                setIsLoading(false);
+                            }, (err) => console.error("庫存同步失敗:", err));
+                            
+                            const logRef = FB_API.collection(database, 'artifacts', appId, 'public', 'data', 'logs');
+                            FB_API.onSnapshot(logRef, (snap) => {
+                                const l = []; snap.forEach(d => l.push({ ...d.data(), fireId: d.id }));
+                                setLogs(l.sort((a,b) => b.bid - a.bid));
+                            }, (err) => console.error("紀錄同步失敗:", err));
+                        }
+                    });
+                };
+                init();
+            }, []);
+
+            const syncToCloud = async (newData) => {
+                if (!db) return;
+                const { FB_API } = window;
+                await FB_API.setDoc(FB_API.doc(db, 'artifacts', appId, 'public', 'data', 'inventory_col', 'main_doc'), { content: newData });
+            };
+
+            const allItemsFlattened = useMemo(() => data.flatMap(c => c.items.map(i => ({ ...i, category: c.category }))), [data]);
+
+            const updateItemProp = (id, field, val) => {
+                const next = data.map(c => ({
+                    ...c,
+                    items: c.items.map(i => i.id === id ? { ...i, [field]: val } : i)
+                }));
+                setData(next); syncToCloud(next);
+            };
+
+            const handleBatchSave = async () => {
+                if (!batchMeta.user.trim()) { alert("請輸入領用人姓名"); return; }
+                const { FB_API } = window;
+                const bid = Date.now();
+                const newEntries = [];
+                let nextData = JSON.parse(JSON.stringify(data));
+
+                batchItems.forEach(bi => {
+                    if (bi.itemId) {
+                        const orig = allItemsFlattened.find(i => i.id === parseInt(bi.itemId));
+                        const final = orig.quantity + bi.in - bi.out;
+                        nextData = nextData.map(c => ({
+                            ...c,
+                            items: c.items.map(it => it.id === orig.id ? { ...it, quantity: final } : it)
+                        }));
+                        newEntries.push({ id: Math.random(), bid, user: batchMeta.user, date: batchMeta.date, itemId: orig.id, itemName: orig.name, cat: orig.category, prev: orig.quantity, final, in: bi.in, out: bi.out, note: bi.note });
+                    }
+                });
+
+                if (!newEntries.length) return;
+                for (const e of newEntries) { 
+                    await FB_API.setDoc(FB_API.doc(FB_API.collection(db, 'artifacts', appId, 'public', 'data', 'logs')), e); 
+                }
+                await syncToCloud(nextData);
+
+                setBatchItems([{ itemId: "", in: 0, out: 0, note: "", key: Date.now() }]);
+                setBatchMeta({ ...batchMeta, user: "" });
+                showMsg("✅ 雲端同步儲存成功");
+            };
+
+            const updateLogEntry = async (logId, field, value) => {
+                const { FB_API } = window;
+                const target = logs.find(l => l.id === logId);
+                
+                const newLogs = logs.map(l => {
+                    if (l.id === logId) {
+                        const oldIn = l.in, oldOut = l.out, oldItemId = l.itemId;
+                        let newEntry = { ...l, [field]: value };
+                        if (field === 'itemId') {
+                            const nInfo = allItemsFlattened.find(i => i.id === parseInt(value));
+                            newEntry.itemName = nInfo.name; newEntry.cat = nInfo.category;
+                            const dData = data.map(c => ({ ...c, items: c.items.map(i => {
+                                if (i.id === oldItemId) return { ...i, quantity: i.quantity - (oldIn - oldOut) };
+                                if (i.id === nInfo.id) return { ...i, quantity: i.quantity + (oldIn - oldOut) };
+                                return i;
+                            })}));
+                            syncToCloud(dData);
+                        }
+                        if (field === 'in' || field === 'out') {
+                            const delta = (field === 'in' ? (value - oldIn) : (oldOut - value));
+                            const dData = data.map(c => ({ ...c, items: c.items.map(i => i.id === l.itemId ? { ...i, quantity: i.quantity + delta } : i)}));
+                            syncToCloud(dData);
+                            newEntry.final = newEntry.prev + (field === 'in' ? value : l.in) - (field === 'out' ? value : l.out);
+                        }
+                        FB_API.setDoc(FB_API.doc(db, 'artifacts', appId, 'public', 'data', 'logs', l.fireId), newEntry);
+                        return newEntry;
+                    }
+                    if ((field === 'user' || field === 'date') && l.bid === target.bid) {
+                        const syncEntry = { ...l, [field]: value };
+                        FB_API.setDoc(FB_API.doc(db, 'artifacts', appId, 'public', 'data', 'logs', l.fireId), syncEntry);
+                        return syncEntry;
+                    }
+                    return l;
+                });
+                setLogs(newLogs);
+            };
+
+            if (isLoading) return <div className="min-h-screen flex items-center justify-center text-slate-400 font-bold animate-pulse text-lg">正在連線至雲端數據服務...</div>;
+
+            return (
+                <div className="min-h-screen">
+                    {toast && <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[150] bg-[#3d4443] text-white px-8 py-3 rounded-2xl shadow-2xl font-bold animate-bounce border border-white/10">{toast}</div>}
+
+                    <nav className="main-header sticky top-0 z-50 px-6 h-20 flex items-center justify-between shadow-2xl">
+                        <div className="flex items-center gap-3 text-white">
+                            <div className="bg-white/20 p-2 rounded-xl shadow-inner"><Icons.Package /></div>
+                            <h1 className="font-black text-2xl tracking-tighter">文具用品盤點庫存表</h1>
+                        </div>
+                        <div className="flex bg-black/20 p-1.5 rounded-2xl gap-2 text-white">
+                            <button onClick={() => setView("inventory")} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-black transition-all ${view === 'inventory' ? 'bg-white text-[#586963] shadow-md' : 'text-white/60 hover:text-white'}`}><Icons.LayoutDashboard className="w-4 h-4" /> 文具庫存總表</button>
+                            <button onClick={() => setView("logs")} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-black transition-all ${view === 'logs' ? 'bg-white text-[#586963] shadow-md' : 'text-white/60 hover:text-white'}`}><Icons.History className="w-4 h-4" /> 領用紀錄</button>
+                        </div>
+                    </nav>
+
+                    <main className="max-w-[1500px] mx-auto p-4 sm:p-10">
+                        {view === "inventory" ? (
+                            <div className="space-y-10 animate-in fade-in duration-500">
+                                <div className="flex flex-col md:flex-row gap-5 items-center">
+                                    <div className="relative flex-grow w-full">
+                                        <Icons.Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
+                                        <input type="text" placeholder="快速搜尋庫存品項..." className="w-full pl-14 pr-6 py-5 rounded-[2rem] border-none shadow-lg bg-white text-lg focus:ring-4 focus:ring-[#586963]/10 outline-none text-slate-700" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
+                                    </div>
+                                    <button onClick={()=>setShowManage(true)} className="bg-[#586963] text-white px-10 py-5 rounded-[2rem] font-black shadow-xl hover:brightness-110 transition-all flex items-center gap-3 whitespace-nowrap group"><Icons.Settings className="group-hover:rotate-90 transition-transform" /> 系統管理</button>
+                                </div>
+
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 text-slate-700">
+                                    {data.map(cat => {
+                                        const filtered = cat.items.filter(i => i.name.toLowerCase().includes(searchTerm.toLowerCase()));
+                                        if (searchTerm && filtered.length === 0) return null;
+                                        const style = CATEGORY_STYLES[cat.category] || CATEGORY_STYLES["預設"];
+
+                                        return (
+                                            <section key={cat.category} className="space-y-6">
+                                                <div className={`${style.head} text-white px-8 py-5 rounded-3xl shadow-xl flex justify-between items-center`}>
+                                                    <InlineEdit value={cat.category} onSave={(n)=> { const next = data.map(c=>c.category===cat.category?{...c,category:n}:c); setData(next); syncToCloud(next); }} className="text-xl font-black tracking-widest min-w-[100px] text-white" color="white" placeholder="類別" />
+                                                    <button onClick={() => setShowAddItem(cat.category)} className="bg-white/20 hover:bg-white/40 p-2 px-4 rounded-xl transition-all flex items-center gap-2 text-xs font-black uppercase border border-white/10 text-white"><Icons.Plus className="w-3.5 h-3.5"/> 新增品項</button>
+                                                </div>
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
+                                                    {filtered.map((item, idx) => (
+                                                        <div key={item.id} className="bg-white rounded-[2rem] p-6 morandi-card">
+                                                            <div className="mb-5">
+                                                                <div className="flex gap-1 items-start">
+                                                                    <span className="font-black text-lg mt-0.5" style={{ color: item.quantity <= 0 ? '#ef4444' : style.hex }}>{idx + 1}.</span>
+                                                                    <InlineEdit value={item.name} onSave={(v)=>updateItemProp(item.id, 'name', v)} className="font-bold text-lg leading-tight h-12 overflow-hidden flex-grow" />
+                                                                </div>
+                                                                <div className="flex flex-wrap items-center gap-2 mt-2">
+                                                                    <div className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-lg border border-slate-100 bg-slate-50 flex items-center text-slate-800`}>單位: <InlineEdit value={item.unit} onSave={(v)=>updateItemProp(item.id, 'unit', v)} className="ml-1 font-black" /></div>
+                                                                    <div className="text-[10px] font-bold text-[#94a3b8] bg-slate-50 px-2.5 py-1 rounded-lg flex items-center border border-slate-100"><span className="text-[#94a3b8]">規格:</span> <InlineEdit isSpec value={item.note} onSave={(v)=>updateItemProp(item.id, 'note', v)} className="ml-1" /></div>
+                                                                </div>
+                                                            </div>
+                                                            <div className={`flex items-center justify-between ${style.light} rounded-2xl p-3 border border-slate-100`}>
+                                                                <button onClick={()=>updateItemProp(item.id, 'quantity', Math.max(0, item.quantity - 1))} className="w-11 h-11 flex items-center justify-center rounded-xl bg-white shadow-sm hover:bg-rose-400 hover:text-white text-slate-300 transition-all active:scale-90"><Icons.Minus/></button>
+                                                                <div className="text-center flex flex-col items-center">
+                                                                    <InlineEdit value={item.quantity} onSave={(v)=>updateItemProp(item.id, 'quantity', v)} className="text-lg font-black" isNumeric forceRed />
+                                                                    <p className="text-[9px] font-black uppercase opacity-40 tracking-widest text-slate-400">庫存</p>
+                                                                </div>
+                                                                <button onClick={()=>updateItemProp(item.id, 'quantity', item.quantity + 1)} className="w-11 h-11 flex items-center justify-center rounded-xl bg-white shadow-sm hover:bg-emerald-500 hover:text-white text-slate-300 transition-all active:scale-90"><Icons.Plus/></button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </section>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="space-y-10 animate-in slide-in-from-bottom-8 duration-500 text-slate-700">
+                                <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-slate-100">
+                                    <div className="logs-header p-10 text-white flex flex-col lg:flex-row lg:items-center justify-between gap-8 relative shadow-lg">
+                                        <div className="relative z-10 text-white"><h2 className="text-3xl font-black tracking-tight flex items-center gap-4"><Icons.ArrowRightLeft className="text-white/40 w-9 h-9" /> 領用紀錄表單</h2><p className="text-white/70 mt-1 uppercase tracking-widest text-xs font-black">Stationery Logs Management</p></div>
+                                        <div className="flex flex-col sm:flex-row gap-4 relative z-10 text-white">
+                                            <div className="bg-white/10 px-5 py-3 rounded-2xl border border-white/20 flex items-center gap-3"><Icons.Calendar className="w-5 h-5 text-white/50"/><input type="date" className="bg-transparent font-bold outline-none" value={batchMeta.date} onChange={e=>setBatchMeta({...batchMeta, date: e.target.value})} /></div>
+                                            <div className="bg-white/10 px-5 py-3 rounded-2xl border border-white/20 flex items-center gap-3 min-w-[220px]">
+                                                <Icons.User className="w-5 h-5 text-white/50"/><div className="flex-grow relative"><input type="text" placeholder="領用人姓名" className="bg-transparent font-bold outline-none w-full placeholder:text-white/40 text-white font-black" value={batchMeta.user} onChange={e=>setBatchMeta({...batchMeta, user: e.target.value})} /><span className="required-star absolute -right-2 top-0" title="必填">*</span></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="p-10 space-y-5">
+                                        {batchItems.map((bi, idx) => (
+                                            <div key={bi.key} className="grid grid-cols-1 md:grid-cols-12 gap-5 items-center bg-slate-50 p-5 rounded-[2rem] border border-slate-200">
+                                                <div className="col-span-5 sm:col-span-6 text-slate-700"><SearchableSelect items={allItemsFlattened} selectedId={bi.itemId} onSelect={(id) => { const n=[...batchItems]; n[idx].itemId = id; setBatchItems(n); }} placeholder="-- 搜尋並選取品項 --" /></div>
+                                                <div className="col-span-2 text-center"><p className="text-[10px] font-black text-emerald-600 mb-1 tracking-widest uppercase">入庫(+)</p><input type="number" className="w-full text-center p-3 rounded-2xl text-lg font-black text-emerald-600 border border-slate-200 shadow-inner outline-none bg-white" value={bi.in} onChange={e=>{const n=[...batchItems]; n[idx].in=Number(e.target.value); setBatchItems(n);}} /></div>
+                                                <div className="col-span-2 text-center"><p className="text-[10px] font-black text-slate-800 mb-1 tracking-widest uppercase">領用(-)</p><input type="number" className="w-full text-center p-3 rounded-2xl text-lg font-black text-slate-800 border border-slate-200 shadow-inner outline-none bg-white" value={bi.out} onChange={e=>{const n=[...batchItems]; n[idx].out=Number(e.target.value); setBatchItems(n);}} /></div>
+                                                <div className="col-span-3 sm:col-span-2"><p className="text-[10px] font-black text-slate-400 mb-1 tracking-widest uppercase">備註</p><div className="flex gap-2"><input type="text" placeholder="用途" className="w-full p-3 rounded-2xl text-xs border border-slate-200 bg-white text-slate-700" value={bi.note} onChange={e=>{const n=[...batchItems]; n[idx].note=e.target.value; setBatchItems(n);}} /><button onClick={()=>setBatchItems(batchItems.filter((_, i)=>i!==idx))} className="text-slate-300 hover:text-rose-500 p-2 transition-colors"><Icons.Trash2 className="w-5 h-5"/></button></div></div>
+                                            </div>
+                                        ))}
+                                        <button onClick={()=>setBatchItems([...batchItems, { itemId:"", in:0, out:0, note:"", key:Date.now() }])} className="w-full border-2 border-dashed border-[#D1DAD5] rounded-[2rem] py-6 text-base font-black text-slate-400 hover:bg-white hover:text-[#9A7B66] transition-all flex items-center justify-center gap-3">+ 繼續增加領用品項</button>
+                                        <div className="pt-10 border-t border-slate-100 flex justify-end">
+                                            <button onClick={handleBatchSave} className="logs-header text-white px-16 py-5 rounded-[2rem] font-black shadow-2xl hover:brightness-110 transition-all active:scale-95 flex items-center gap-3 text-lg"><Icons.Save className="w-6 h-6" /> 確認存檔並同步庫存</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-6">
+                                    <h3 className="font-black text-2xl px-4 flex items-center gap-3 text-[#3d4443]"><Icons.History className="text-[#586963]" /> 歷史紀錄明細</h3>
+                                    {groupedLogs.map((g, idx) => (
+                                        <div key={g.bid} className={`rounded-[2.5rem] overflow-hidden shadow-sm border ${idx % 2 === 0 ? 'bg-white border-slate-200' : 'bg-slate-50 border-slate-200'}`}>
+                                            <div className="px-10 py-5 border-b flex justify-between items-center bg-white/50 text-[#333333]">
+                                                <div className="flex gap-8 font-bold text-sm items-center">
+                                                    <InlineEdit value={g.date} onSave={(v) => updateLogEntry(g.items[0].id, 'date', v)} className="bg-white/80 px-3 py-1 rounded-lg border shadow-sm" />
+                                                    <div className="flex items-center gap-2 bg-white border border-slate-200 px-5 py-1.5 rounded-full shadow-sm text-[#586963]">
+                                                        <Icons.User className="w-4 h-4 text-[#586963]"/><InlineEdit value={g.user} onSave={(v) => updateLogEntry(g.items[0].id, 'user', v)} />
+                                                    </div>
+                                                </div>
+                                                <button onClick={async ()=>{
+                                                    const { FB_API } = window;
+                                                    for (const it of g.items) { 
+                                                        await FB_API.deleteDoc(FB_API.doc(db, 'artifacts', appId, 'public', 'data', 'logs', it.fireId));
+                                                    }
+                                                }} className="text-slate-300 hover:text-rose-500 transition-colors"><Icons.Trash2 className="w-5 h-5"/></button>
+                                            </div>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-sm text-slate-600">
+                                                    <tbody className="divide-y divide-slate-100">
+                                                        {g.items.map(i => (
+                                                            <tr key={i.id} className="hover:bg-white/80 transition-colors text-slate-900">
+                                                                <td className="px-10 py-4 font-bold w-1/4"><SearchableSelect items={allItemsFlattened} selectedId={i.itemId} onSelect={(id) => updateLogEntry(i.id, 'itemId', id)} isTableMode /></td>
+                                                                <td className="px-4 py-4 text-center text-slate-400 italic">前次: {i.prev}</td>
+                                                                <td className="px-4 py-4 text-center">
+                                                                    <div className="flex flex-col items-center">
+                                                                        {i.in>0 && <div className="text-emerald-600 font-black flex items-center">入庫: +<InlineEdit isNumeric value={i.in} onSave={(v)=>updateLogEntry(i.id, 'in', v)} className="w-12 text-center" /></div>}
+                                                                        {i.out>0 && <div className="text-[#333333] font-black flex items-center">領用: -<InlineEdit isNumeric value={i.out} onSave={(v)=>updateLogEntry(i.id, 'out', v)} className="w-12 text-center" /></div>}
+                                                                    </div>
+                                                                </td>
+                                                                <td className={`px-4 py-4 text-center font-black bg-white/40 min-w-[100px]`} style={{ color: i.final <= 0 ? '#ef4444' : '#333333' }}>現有: {i.final}</td>
+                                                                <td className="px-10 py-4 text-slate-400 italic text-xs"><InlineEdit isSpec value={i.note} onSave={(v)=>updateLogEntry(i.id, 'note', v)} placeholder="編輯備註" /></td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* 管理彈窗 */}
+                    {(showManage || showAddItem) && (
+                        <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 modal-overlay text-slate-700">
+                            <div className="bg-white w-full max-w-xl rounded-[3rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 border-t-8 border-[#586963]">
+                                <div className="bg-[#fcfafa] p-8 flex justify-between items-center border-b text-[#3d4443]">
+                                    <h2 className="text-2xl font-black flex items-center gap-3"><Icons.Settings className="text-[#586963]" /> {showAddItem ? `${showAddItem} - 增加品項` : "系統管理"}</h2>
+                                    <button onClick={()=>{setShowManage(false); setShowAddItem(null);}} className="hover:bg-slate-200 p-2 rounded-full text-slate-400"><Icons.X /></button>
+                                </div>
+                                <div className="p-10 space-y-10 max-h-[75vh] overflow-y-auto">
+                                    {!showAddItem && (
+                                        <section className="space-y-4">
+                                            <h3 className="font-black text-slate-400 text-xs uppercase tracking-[0.3em]">Step 1. 新增分類</h3>
+                                            <div className="flex gap-3">
+                                                <input type="text" placeholder="類別名稱..." id="new_cat_in" className="flex-grow bg-slate-100 border-none rounded-2xl px-6 py-4 font-bold shadow-inner outline-none focus:ring-4 focus:ring-[#586963]/10" />
+                                                <button onClick={async ()=>{ 
+                                                    const v = document.getElementById('new_cat_in').value; 
+                                                    if(v){ const next = [...data,{category:v,items:[]}]; setData(next); await syncToCloud(next); document.getElementById('new_cat_in').value=""; showMsg("分類已建立");} 
+                                                }} className="main-header text-white px-8 py-4 rounded-2xl font-black shadow-lg">新增</button>
+                                            </div>
+                                        </section>
+                                    )}
+                                    <section className="space-y-5 pt-4 border-t border-slate-100">
+                                        <h3 className="font-black text-slate-400 text-xs uppercase tracking-[0.3em]">Step 2. 品項錄入</h3>
+                                        {!showAddItem && (<select id="it_cat" className="w-full bg-slate-100 border-none rounded-2xl p-5 font-bold shadow-inner text-slate-500 outline-none text-slate-900"><option value="">-- 選擇分類 --</option>{data.map(c=><option key={c.category} value={c.category}>{c.category}</option>)}</select>)}
+                                        <div className="grid grid-cols-2 gap-4"><input type="text" placeholder="文具名稱" className="bg-slate-100 border-none rounded-2xl p-5 font-bold shadow-inner outline-none text-slate-900" id="it_name"/><input type="text" placeholder="單位" className="bg-slate-100 border-none rounded-2xl p-5 font-bold shadow-inner outline-none text-slate-900" id="it_unit"/></div>
+                                        <input type="text" placeholder="規格 (如:10入/盒)" className="w-full bg-slate-100 border-none rounded-2xl p-5 font-bold shadow-inner outline-none text-slate-900" id="it_note"/>
+                                        <input type="number" placeholder="初始數量" className="w-full bg-slate-100 border-none rounded-2xl p-5 font-bold shadow-inner outline-none text-slate-900" id="it_qty"/>
+                                        <button onClick={async ()=>{
+                                            const c = showAddItem || document.getElementById('it_cat').value;
+                                            const n = document.getElementById('it_name').value, u = document.getElementById('it_unit').value, q = document.getElementById('it_qty').value, nt = document.getElementById('it_note').value;
+                                            if(n && c){ 
+                                                const next = data.map(ca=>ca.category===c?{...ca,items:[...ca.items,{id:Date.now(),name:n,unit:u,quantity:Number(q),note:nt}]}:ca);
+                                                setData(next); await syncToCloud(next); showMsg("錄入完成"); setShowAddItem(null); setShowManage(false); 
+                                            } else { alert("請填寫品名與類別"); }
+                                        }} className="main-header text-white py-5 rounded-[2rem] font-black shadow-xl hover:bg-black transition-all">確認加入總表</button>
+                                    </section>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="fixed bottom-10 right-10 z-[60]">
+                        <button onClick={() => {
+                            const text = `【文具庫存狀態報告 - ${new Date().toLocaleDateString()}】\n` + data.map(c => `\n■ ${c.category}\n` + c.items.map((i,idx) => `${idx+1}. ${i.name}: ${i.quantity} ${i.unit} (${i.note || '無規格'})`).join('\n')).join('\n');
+                            navigator.clipboard.writeText(text);
+                            showMsg("📋 全體報告已複製至剪貼簿");
+                        }} className="main-header text-white p-6 rounded-full font-black shadow-2xl hover:scale-110 active:scale-95 transition-all flex items-center gap-3"><Icons.ClipboardCheck className="text-white/60" /></button>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
